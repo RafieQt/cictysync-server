@@ -372,7 +372,122 @@ async function run() {
       res.send(result);
     });
 
-    
+    app.post("/create-checkout-session", verifyToken, async (req, res) => {
+      const stripe = getStripe();
+      if (!stripe) {
+        return res.status(500).send({
+          message:
+            "Stripe is not configured. Set STRIPE_SECRET_KEY in citysync-server/.env and restart the server.",
+        });
+      }
+      const { type, issueId, issueTitle, userEmail, amount } = req.body;
+      if (!type || !userEmail || amount == null) {
+        return res.status(400).send({ message: "Missing checkout fields" });
+      }
+
+      try {
+        const clientUrl = process.env.CLIENT_URL || "http://localhost:5173";
+        const currency = process.env.STRIPE_CURRENCY || "usd";
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          mode: "payment",
+          line_items: [
+            {
+              price_data: {
+                currency,
+                product_data: {
+                  name:
+                    type === "boost"
+                      ? `Boost: ${issueTitle || "Issue"}`
+                      : "CitySync Premium Subscription",
+                },
+                unit_amount: Math.round(Number(amount)),
+              },
+              quantity: 1,
+            },
+          ],
+          success_url: `${clientUrl}/payment/success?type=${type}&issueId=${issueId || ""}&email=${encodeURIComponent(userEmail)}&amount=${amount}&session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${clientUrl}/payment/cancel`,
+          metadata: {
+            type,
+            issueId: issueId || "",
+            userEmail,
+            amount: String(amount),
+          },
+        });
+
+        res.send({ url: session.url });
+      } catch (err) {
+        console.error("Checkout session error:", err.message);
+        res.status(500).send({
+          message: err.message || "Could not create checkout session",
+        });
+      }
+    });
+
+    app.post("/verify-checkout-session", verifyToken, async (req, res) => {
+      const stripe = getStripe();
+      if (!stripe) {
+        return res
+          .status(500)
+          .send({ message: "Stripe is not configured on the server" });
+      }
+      const { sessionId } = req.body;
+      if (!sessionId) {
+        return res.status(400).send({ message: "sessionId required" });
+      }
+
+      const existing = await paymentCollection.findOne({
+        transactionId: sessionId,
+      });
+      if (existing) {
+        return res.send({ success: true, alreadyRecorded: true });
+      }
+
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      if (session.payment_status !== "paid") {
+        return res.status(400).send({ message: "Payment not completed" });
+      }
+
+      const { type, issueId, userEmail, amount } = session.metadata;
+      const payment = {
+        type,
+        amount: Number(amount),
+        userEmail,
+        issueId: issueId || undefined,
+        issueTitle: session.metadata.issueTitle,
+        transactionId: sessionId,
+        createdAt: new Date(),
+      };
+      await paymentCollection.insertOne(payment);
+
+      if (type === "subscription") {
+        await userCollection.updateOne(
+          { email: userEmail },
+          { $set: { isPremium: true } },
+        );
+      }
+      if (type === "boost" && issueId && ObjectId.isValid(issueId)) {
+        await issueCollection.updateOne(
+          { _id: new ObjectId(issueId) },
+          {
+            $set: { priority: "high" },
+            $push: {
+              timeline: {
+                status: "Boosted",
+                message: "Issue boosted to high priority",
+                updatedBy: userEmail,
+                role: "citizen",
+                date: new Date(),
+              },
+            },
+          },
+        );
+      }
+
+      res.send({ success: true });
+    });
 
     
 
