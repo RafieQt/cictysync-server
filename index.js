@@ -85,11 +85,7 @@ async function run() {
     });
 
     app.post("/users", async (req, res) => {
-     
-      console.log(req.body);
       const user = req.body;
-
-      console.log("REQ BODY:", user);
 
       if (!user?.email) {
         return res.status(400).send({ message: "Email required" });
@@ -98,7 +94,7 @@ async function run() {
       const updateFields = {
         email: user.email,
         name: user.name,
-        photo: user.photo, 
+        photo: user.photo,
       };
 
       const result = await userCollection.updateOne(
@@ -106,9 +102,10 @@ async function run() {
         {
           $set: updateFields,
           $setOnInsert: {
-            role: "citizen",
-            status: "active",
-            isPremium: false,
+            role: user.role || "citizen", // ← use role from request, fallback to citizen
+            status: user.status || "active",
+            isPremium: user.isPremium || false,
+            phone: user.phone || "",
             createdAt: new Date(),
           },
         },
@@ -163,6 +160,15 @@ async function run() {
       const result = await issueCollection
         .find(filter)
         .sort({ createdAt: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    app.get("/issues/resolved", async (req, res) => {
+      const result = await issueCollection
+        .find({ status: "resolved" })
+        .sort({ updatedAt: -1 })
+        .limit(6)
         .toArray();
       res.send(result);
     });
@@ -488,8 +494,6 @@ async function run() {
 
       res.send({ success: true });
     });
-
-    
 
     // await client.db("admin").command({ ping: 1 });
     // console.log("Connected to MongoDB");
