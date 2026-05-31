@@ -4,6 +4,7 @@ const app = express();
 require("dotenv").config();
 const { MongoClient, ServerApiVersion } = require("mongodb");
 const port = process.env.PORT || 3000;
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 // Middleware
 app.use(express.json());
@@ -28,6 +29,40 @@ async function run() {
     const db = client.db("citysync_db");
     const userCollection = db.collection("/users");
 
+    app.post("/create-checkout-session", verifyToken, async (req, res) => {
+      const { type, issueId, issueTitle, userEmail, amount } = req.body;
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        mode: "payment",
+        line_items: [
+          {
+            price_data: {
+              currency: "usd", // change to "bdt" if your Stripe account supports it
+              product_data: {
+                name:
+                  type === "boost"
+                    ? `Boost: ${issueTitle}`
+                    : "CitySync Premium Subscription",
+              },
+              unit_amount: amount * 100, // in cents/poisha
+            },
+            quantity: 1,
+          },
+        ],
+        success_url: `${process.env.CLIENT_URL}/payment/success?type=${type}&issueId=${issueId || ""}&email=${userEmail}&amount=${amount}&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.CLIENT_URL}/payment/cancel`,
+        metadata: {
+          type,
+          issueId: issueId || "",
+          userEmail,
+          amount: String(amount),
+        },
+      });
+
+      res.send({ url: session.url });
+    });
+
     // Users API
     app.get("/users", async (req, res) => {
       const query = {};
@@ -43,22 +78,22 @@ async function run() {
 
     app.post("/users", async (req, res) => {
       const user = req.body;
-      const newUser = {...user, role: "citizen", status: "active", isPremium: false}
+      const newUser = {
+        ...user,
+        role: "citizen",
+        status: "active",
+        isPremium: false,
+      };
       const result = await userCollection.insertOne(newUser);
       res.send(result);
     });
 
-
     // Issue API
-    app.post('/issues', async(req, res)=>{
+    app.post("/issues", async (req, res) => {
       const issue = req.body;
-    })
+    });
 
-    app.get('/issues', async(req, res)=>{
-      
-    })
-
-
+    app.get("/issues", async (req, res) => {});
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
