@@ -491,8 +491,8 @@ async function run() {
 
     
 
-    await client.db("admin").command({ ping: 1 });
-    console.log("Connected to MongoDB");
+    // await client.db("admin").command({ ping: 1 });
+    // console.log("Connected to MongoDB");
 
     app.get("/", (req, res) => {
       res.send("City is Syncing");
