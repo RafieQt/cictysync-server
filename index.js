@@ -286,6 +286,35 @@ async function run() {
       res.send(result);
     });
 
+    // ── Stats ──────────────────────────────────────────────────────────────
+    app.get("/stats/citizen/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const issues = await issueCollection.find({ userEmail: email }).toArray();
+      const payments = await paymentCollection
+        .find({ userEmail: email })
+        .toArray();
+      res.send({
+        total: issues.length,
+        pending: issues.filter((i) => i.status === "pending").length,
+        inProgress: issues.filter((i) => i.status === "in-progress").length,
+        resolved: issues.filter((i) => i.status === "resolved").length,
+        totalPayments: payments.reduce((sum, p) => sum + (p.amount || 0), 0),
+      });
+    });
+
+    app.get("/stats/staff/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const issues = await issueCollection
+        .find({ "assignedStaff.email": email })
+        .toArray();
+      res.send({
+        assigned: issues.length,
+        pending: issues.filter((i) => i.status === "pending").length,
+        inProgress: issues.filter((i) => i.status === "in-progress").length,
+        resolved: issues.filter((i) => i.status === "resolved").length,
+      });
+    });
+
     
 
     
