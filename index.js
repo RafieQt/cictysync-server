@@ -129,6 +129,46 @@ async function run() {
       res.send(result);
     });
 
+    // ── Issues ─────────────────────────────────────────────────────────────
+    app.get("/issues", async (req, res) => {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 9;
+      const filter = buildIssueQuery(req.query);
+      const skip = (page - 1) * limit;
+      const [result, total] = await Promise.all([
+        issueCollection
+          .find(filter)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray(),
+        issueCollection.countDocuments(filter),
+      ]);
+      res.send({ result, total });
+    });
+
+    app.get("/issues/user/:email", verifyToken, async (req, res) => {
+      const filter = { userEmail: req.params.email };
+      if (req.query.status) filter.status = req.query.status;
+      const result = await issueCollection
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    app.get("/issues/staff/:email", verifyToken, async (req, res) => {
+      const filter = { "assignedStaff.email": req.params.email };
+      if (req.query.status) filter.status = req.query.status;
+      const result = await issueCollection
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    
+
     
 
     await client.db("admin").command({ ping: 1 });
