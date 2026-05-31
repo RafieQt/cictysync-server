@@ -167,6 +167,125 @@ async function run() {
       res.send(result);
     });
 
+    app.get("/issues/:id", async (req, res) => {
+      if (!ObjectId.isValid(req.params.id)) {
+        return res.status(400).send({ message: "Invalid issue id" });
+      }
+      const issue = await issueCollection.findOne({
+        _id: new ObjectId(req.params.id),
+      });
+      if (!issue) return res.status(404).send({ message: "Issue not found" });
+      res.send(issue);
+    });
+
+    app.post("/issues", verifyToken, async (req, res) => {
+      try {
+        const issue = req.body;
+        if (!issue?.userEmail || !issue?.title) {
+          return res
+            .status(400)
+            .send({ message: "Missing required issue fields" });
+        }
+
+        const dbUser = await userCollection.findOne({ email: issue.userEmail });
+        if (dbUser && !dbUser.isPremium) {
+          const count = await issueCollection.countDocuments({
+            userEmail: issue.userEmail,
+          });
+          if (count >= 3) {
+            return res
+              .status(403)
+              .send({ message: "Free users can only submit 3 issues" });
+          }
+        }
+
+        const newIssue = {
+          title: issue.title,
+          description: issue.description,
+          category: issue.category,
+          location: issue.location,
+          image: issue.image,
+          userEmail: issue.userEmail,
+          userName: issue.userName,
+          userPhoto: issue.userPhoto,
+          status: "pending",
+          priority: "normal",
+          upvotes: [],
+          assignedStaff: null,
+          timeline: [
+            {
+              status: "Reported",
+              message: "Issue reported by citizen",
+              updatedBy: issue.userEmail,
+              role: "citizen",
+              date: new Date(),
+            },
+          ],
+          createdAt: new Date(),
+        };
+        const result = await issueCollection.insertOne(newIssue);
+        res.send(result);
+      } catch (err) {
+        console.error("POST /issues error:", err.message);
+        res
+          .status(500)
+          .send({ message: err.message || "Failed to create issue" });
+      }
+    });
+
+    app.patch("/issues/:id", verifyToken, async (req, res) => {
+      if (!ObjectId.isValid(req.params.id)) {
+        return res.status(400).send({ message: "Invalid issue id" });
+      }
+      const updates = { ...req.body };
+      const timelineEntry = updates.timelineEntry;
+      delete updates.timelineEntry;
+      delete updates._id;
+
+      const setOps = { $set: updates };
+      if (timelineEntry) {
+        setOps.$push = { timeline: timelineEntry };
+      }
+      if (updates.status === "resolved" || updates.priority === "high") {
+        // allow boost via payment flow
+      }
+
+      const result = await issueCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        setOps,
+      );
+      res.send(result);
+    });
+
+    app.patch("/issues/:id/upvote", verifyToken, async (req, res) => {
+      if (!ObjectId.isValid(req.params.id)) {
+        return res.status(400).send({ message: "Invalid issue id" });
+      }
+      const { email } = req.body;
+      const issue = await issueCollection.findOne({
+        _id: new ObjectId(req.params.id),
+      });
+      if (!issue) return res.status(404).send({ message: "Issue not found" });
+      if (issue.upvotes?.includes(email)) {
+        return res.status(400).send({ message: "Already upvoted" });
+      }
+      await issueCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $addToSet: { upvotes: email } },
+      );
+      res.send({ success: true });
+    });
+
+    app.delete("/issues/:id", verifyToken, async (req, res) => {
+      if (!ObjectId.isValid(req.params.id)) {
+        return res.status(400).send({ message: "Invalid issue id" });
+      }
+      const result = await issueCollection.deleteOne({
+        _id: new ObjectId(req.params.id),
+      });
+      res.send(result);
+    });
+
     
 
     
