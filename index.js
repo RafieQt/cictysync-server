@@ -333,6 +333,45 @@ async function run() {
       });
     });
 
+    // ── Payments ───────────────────────────────────────────────────────────
+    app.get("/payments", verifyToken, async (req, res) => {
+      const result = await paymentCollection
+        .find()
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    app.post("/payments", verifyToken, async (req, res) => {
+      const payment = { ...req.body, createdAt: new Date() };
+      const result = await paymentCollection.insertOne(payment);
+
+      if (payment.type === "subscription") {
+        await userCollection.updateOne(
+          { email: payment.userEmail },
+          { $set: { isPremium: true } },
+        );
+      }
+      if (payment.type === "boost" && payment.issueId) {
+        await issueCollection.updateOne(
+          { _id: new ObjectId(payment.issueId) },
+          {
+            $set: { priority: "high" },
+            $push: {
+              timeline: {
+                status: "Boosted",
+                message: "Issue boosted to high priority",
+                updatedBy: payment.userEmail,
+                role: "citizen",
+                date: new Date(),
+              },
+            },
+          },
+        );
+      }
+      res.send(result);
+    });
+
     
 
     
