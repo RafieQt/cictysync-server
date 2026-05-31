@@ -1,18 +1,25 @@
 const express = require("express");
 const cors = require("cors");
-const app = express();
+const jwt = require("jsonwebtoken");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
-const { MongoClient, ServerApiVersion } = require("mongodb");
-const port = process.env.PORT || 3000;
-const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
-// Middleware
+const app = express();
+const port = process.env.PORT || 3000;
+
+let stripeClient = null;
+const getStripe = () => {
+  const key = process.env.STRIPE_SECRET_KEY?.trim();
+  if (!key) return null;
+  if (!stripeClient) stripeClient = require("stripe")(key);
+  return stripeClient;
+};
+
 app.use(express.json());
 app.use(cors());
 
 const uri = `mongodb://${process.env.DB_USER}:${process.env.DB_PASS}@ac-1dyistj-shard-00-00.f4bf0kb.mongodb.net:27017,ac-1dyistj-shard-00-01.f4bf0kb.mongodb.net:27017,ac-1dyistj-shard-00-02.f4bf0kb.mongodb.net:27017/?ssl=true&replicaSet=atlas-v7wytu-shard-0&authSource=admin&appName=Cluster0`;
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -21,96 +28,128 @@ const client = new MongoClient(uri, {
   },
 });
 
+const verifyToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).send({ message: "Unauthorized" });
+  }
+  const token = authHeader.split(" ")[1];
+  try {
+    req.decoded = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).send({ message: "Invalid or expired token" });
+  }
+};
+
+const buildIssueQuery = (query) => {
+  const filter = {};
+  if (query.category) filter.category = query.category;
+  if (query.status) filter.status = query.status;
+  if (query.priority) filter.priority = query.priority;
+  if (query.search) {
+    filter.$or = [
+      { title: { $regex: query.search, $options: "i" } },
+      { location: { $regex: query.search, $options: "i" } },
+      { description: { $regex: query.search, $options: "i" } },
+    ];
+  }
+  return filter;
+};
+
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
-
     const db = client.db("citysync_db");
-    const userCollection = db.collection("/users");
+    // Legacy DB used collection name "/users"
+    const userCollection = db.collection("users");
+    const issueCollection = db.collection("issues");
+    const paymentCollection = db.collection("payments");
 
-    app.post("/create-checkout-session", verifyToken, async (req, res) => {
-      const { type, issueId, issueTitle, userEmail, amount } = req.body;
-
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        mode: "payment",
-        line_items: [
-          {
-            price_data: {
-              currency: "usd", // change to "bdt" if your Stripe account supports it
-              product_data: {
-                name:
-                  type === "boost"
-                    ? `Boost: ${issueTitle}`
-                    : "CitySync Premium Subscription",
-              },
-              unit_amount: amount * 100, // in cents/poisha
-            },
-            quantity: 1,
-          },
-        ],
-        success_url: `${process.env.CLIENT_URL}/payment/success?type=${type}&issueId=${issueId || ""}&email=${userEmail}&amount=${amount}&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.CLIENT_URL}/payment/cancel`,
-        metadata: {
-          type,
-          issueId: issueId || "",
-          userEmail,
-          amount: String(amount),
-        },
+    app.post("/jwt", async (req, res) => {
+      const { email } = req.body;
+      if (!email) return res.status(400).send({ message: "Email required" });
+      const token = jwt.sign({ email }, process.env.JWT_SECRET, {
+        expiresIn: "7d",
       });
-
-      res.send({ url: session.url });
+      res.send({ token });
     });
 
-    // Users API
+    // ── Users ──────────────────────────────────────────────────────────────
     app.get("/users", async (req, res) => {
       const query = {};
-      const { email } = req.query;
-
-      if (email) {
-        query.email = email;
-      }
-      const cursor = await userCollection.find(query);
-      const result = await cursor.toArray();
+      if (req.query.email) query.email = req.query.email;
+      if (req.query.role) query.role = req.query.role;
+      const result = await userCollection.find(query).toArray();
       res.send(result);
     });
 
     app.post("/users", async (req, res) => {
+     
+      console.log(req.body);
       const user = req.body;
-      const newUser = {
-        ...user,
-        role: "citizen",
-        status: "active",
-        isPremium: false,
+
+      console.log("REQ BODY:", user);
+
+      if (!user?.email) {
+        return res.status(400).send({ message: "Email required" });
+      }
+
+      const updateFields = {
+        email: user.email,
+        name: user.name,
+        photo: user.photo, 
       };
-      const result = await userCollection.insertOne(newUser);
+
+      const result = await userCollection.updateOne(
+        { email: user.email },
+        {
+          $set: updateFields,
+          $setOnInsert: {
+            role: "citizen",
+            status: "active",
+            isPremium: false,
+            createdAt: new Date(),
+          },
+        },
+        { upsert: true },
+      );
+
       res.send(result);
     });
 
-    // Issue API
-    app.post("/issues", async (req, res) => {
-      const issue = req.body;
+    app.patch("/users/:email", verifyToken, async (req, res) => {
+      const updates = { ...req.body };
+      delete updates.email;
+      delete updates._id;
+      const result = await userCollection.updateOne(
+        { email: req.params.email },
+        { $set: updates },
+      );
+      res.send(result);
     });
 
-    app.get("/issues", async (req, res) => {});
+    
 
-    // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!",
-    );
-  } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
+    console.log("Connected to MongoDB");
+
+    app.get("/", (req, res) => {
+      res.send("City is Syncing");
+    });
+
+    app.listen(port, () => {
+      console.log(`CitySync server listening on port ${port}`);
+      console.log(
+        getStripe()
+          ? "Stripe: configured"
+          : "Stripe: NOT configured (add STRIPE_SECRET_KEY to .env)",
+      );
+    });
+  } catch (err) {
+    console.error("MongoDB connection error:", err);
+    process.exit(1);
   }
 }
+
 run().catch(console.dir);
-
-app.get("/", (req, res) => {
-  res.send("City is Syncing");
-});
-
-app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`);
-});
