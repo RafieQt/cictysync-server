@@ -315,6 +315,24 @@ async function run() {
       });
     });
 
+    app.get("/stats/admin", verifyToken, async (req, res) => {
+      const [issues, payments, users] = await Promise.all([
+        issueCollection.find().sort({ createdAt: -1 }).toArray(),
+        paymentCollection.find().sort({ createdAt: -1 }).toArray(),
+        userCollection.find().sort({ createdAt: -1 }).limit(6).toArray(),
+      ]);
+      res.send({
+        totalIssues: issues.length,
+        pending: issues.filter((i) => i.status === "pending").length,
+        resolved: issues.filter((i) => i.status === "resolved").length,
+        rejected: issues.filter((i) => i.status === "rejected").length,
+        totalRevenue: payments.reduce((sum, p) => sum + (p.amount || 0), 0),
+        latestIssues: issues.slice(0, 5),
+        latestPayments: payments.slice(0, 5),
+        latestUsers: users.slice(0, 6),
+      });
+    });
+
     
 
     
